@@ -78,6 +78,56 @@ function getExceptionName(p_ErrCode int) return varchar2
      return null;
    end;
  end getExceptionName;
+-- Checking for new keyword
+function chk_new_keyword(
+  p_owner varchar2 := user,
+  p_ignore_prefix varchar2 := c_ignore_prefix
+  ) return  int is
+v_lines_count int := 0;
+begin
+  for r in (  
+select 
+row_number() over( order by s.OWNER, s.NAME, s.TYPE, s.LINE)rn,
+s.OWNER, s.NAME, s.TYPE, s.LINE
+  from all_identifiers r,
+       all_identifiers d,
+       all_identifiers a,
+       all_identifiers c,
+       all_source      s
+ where r.OWNER = p_owner
+   and r.TYPE = 'OBJECT'
+   and r.USAGE = 'REFERENCE'
+   and r.OBJECT_NAME not like p_ignore_prefix||'%'
+   and r.OWNER = d.OWNER
+   and r.OBJECT_NAME = d.OBJECT_NAME
+   and r.OBJECT_TYPE = d.OBJECT_TYPE
+   and r.LINE = d.LINE
+   and d.TYPE = 'VARIABLE'
+   and d.USAGE = 'DECLARATION'
+   and a.SIGNATURE = d.SIGNATURE
+   and a.USAGE = 'ASSIGNMENT'
+   and c.OWNER = r.OWNER
+   and c.NAME = r.NAME
+   and c.TYPE = 'FUNCTION'
+   and c.USAGE = 'CALL'
+   and c.OBJECT_TYPE = a.OBJECT_TYPE
+   and c.OBJECT_NAME = a.OBJECT_NAME
+   and s.OWNER = c.OWNER
+   and s.TYPE = c.OBJECT_TYPE
+   and s.NAME = c.OBJECT_NAME
+   and s.LINE between a.LINE and c.LINE
+   and upper(s.TEXT) like '%NEW %'
+    )loop
+    v_lines_count := r.rn; 
+          if r.rn = 1 then
+            dbms_output.put_line(
+            'The keyword "new" in the type constructor expressions is optional in Oracle and is absent in Tibero');
+            dbms_output.put_line('Reference list');
+          end if;
+          dbms_output.put_line(r.rn||' '||r.type||' '||r.owner||'.'||r.name||' line '||r.line);
+    end loop;
+    return v_lines_count;
+end chk_new_keyword;    
 -- Checking for exceptions
 function chk_excptns(
   p_owner varchar2 := user,
@@ -200,7 +250,10 @@ procedure Run(
   v_lines_count int := 0;
  begin
  dbms_output.enable(null);
+ dbms_output.put_line('Check exceptions...');
  v_lines_count := chk_excptns(p_owner,p_ignore_prefix);
+ dbms_output.put_line('Check other issues...');
+ v_lines_count := v_lines_count + chk_new_keyword(p_owner,p_ignore_prefix);
  dbms_output.put_line('***');
  dbms_output.put_line(v_lines_count||' lines need to be rewritten for migration to Tibero');
   SELECT count(*)
