@@ -21,4 +21,5 @@ At the moment, only the use of Oracle system error codes is checked.
     for Tibero and Oracle
     ***
     3 lines need to be rewritten for migration to Tibero
-    227 lines of PL/SQL code total in HR scheme
+    34 analyzable lines of PL/SQL code in HR scheme(compiled with plscope_settings='IDENTIFIERS:ALL')
+    318 total lines of PL/SQL code in HR scheme

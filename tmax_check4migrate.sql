@@ -5,17 +5,18 @@ create or replace package tmax_check4migrate is
   -- Purpose : Checking for known migration issues from Oracle to Tibero
   -- Before using you need ALTER SESSION SET plscope_settings='IDENTIFIERS:ALL' and recompile pl/sql objects
   -- Version of Oracle must be 11g or higher 
+  c_ignore_prefix constant varchar2(8) := 'TMAX_';
 -- Get exception name by error code
 function getExceptionName(p_ErrCode int) return varchar2;
 -- Checking for exceptions
 function chk_excptns(
   p_owner varchar2 := user,
-  p_ignore_prefix varchar2 := 'TMAX_'
+  p_ignore_prefix varchar2 := c_ignore_prefix
   ) return int;
 -- Run checking
 procedure Run(
   p_owner varchar2 := user,
-  p_ignore_prefix varchar2 := 'TMAX_'
+  p_ignore_prefix varchar2 := c_ignore_prefix
   );
 end tmax_check4migrate;
 /
@@ -80,7 +81,7 @@ function getExceptionName(p_ErrCode int) return varchar2
 -- Checking for exceptions
 function chk_excptns(
   p_owner varchar2 := user,
-  p_ignore_prefix varchar2 := 'TMAX_'
+  p_ignore_prefix varchar2 := c_ignore_prefix
   ) return  int is
   v_err_code int;
   v_warning boolean := false;
@@ -193,20 +194,30 @@ end chk_excptns;
 -- Run checking
 procedure Run(
   p_owner varchar2 := user,
-  p_ignore_prefix varchar2 := 'TMAX_'
+  p_ignore_prefix varchar2 := c_ignore_prefix
   )
   is
   v_lines_count int := 0;
  begin
+ dbms_output.enable(null);
  v_lines_count := chk_excptns(p_owner,p_ignore_prefix);
  dbms_output.put_line('***');
  dbms_output.put_line(v_lines_count||' lines need to be rewritten for migration to Tibero');
+  SELECT count(*)
+    into v_lines_count
+    FROM all_plsql_object_settings s, all_source c
+   where s.PLSCOPE_SETTINGS like '%IDENTIFIERS:ALL%'
+     and c.NAME not like p_ignore_prefix || '%'
+     and c.OWNER = s.OWNER
+     and c.NAME = s.NAME
+     and c.TYPE = s.TYPE;
+  dbms_output.put_line(v_lines_count||' analyzable lines of PL/SQL code in '||p_owner||' scheme(compiled with plscope_settings=''IDENTIFIERS:ALL'')');
   select count(*)
    into v_lines_count
    from all_source s
   where s.OWNER = p_owner
     and s.NAME not like p_ignore_prefix || '%';
- dbms_output.put_line(v_lines_count||' lines of PL/SQL code total in '||p_owner||' scheme');
+ dbms_output.put_line(v_lines_count||' total lines of PL/SQL code in '||p_owner||' scheme');
  end Run;
 end tmax_check4migrate;
 /
