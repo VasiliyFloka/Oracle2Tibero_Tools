@@ -78,6 +78,81 @@ function getExceptionName(p_ErrCode int) return varchar2
      return null;
    end;
  end getExceptionName;
+-- print REFERENCE list
+function print_ref_list(
+  p_owner varchar2 := user,
+  p_ignore_prefix varchar2 := c_ignore_prefix,
+  p_signature varchar2,
+  p_type varchar2,
+  p_usage varchar2
+  ) return int is
+  v_lines_count int := 0;
+  begin
+    for r in (
+      select row_number() over(order by i.OWNER, i.OBJECT_NAME, i.OBJECT_TYPE, i.LINE) rn,
+             i.SIGNATURE,
+             i.OWNER,
+             i.OBJECT_NAME,
+             i.OBJECT_TYPE,
+             i.LINE
+        from all_identifiers i
+       where i.OWNER = p_owner
+         and i.OBJECT_NAME not like p_ignore_prefix || '%'
+         and i.TYPE = p_type
+         and i.USAGE = p_usage
+         and i.SIGNATURE = p_signature
+           ) loop
+          v_lines_count := v_lines_count + 1; 
+          if r.rn = 1 then
+            dbms_output.put_line(' Reference list');
+          end if;
+          dbms_output.put_line(r.rn||' '||r.object_type||' '||r.owner||'.'||r.object_name||' line '||r.line);
+    end loop;
+    return v_lines_count; 
+end print_ref_list;    
+-- search for the parallel-enabled functions
+function chk_functions(
+  p_owner varchar2 := user,
+  p_ignore_prefix varchar2 := c_ignore_prefix
+  ) return  int is
+v_lines_count int := 0;
+v_dummy int;
+begin
+  for p in (
+   select row_number() over(order by p.OWNER, p.OBJECT_NAME, p.OBJECT_TYPE, p.PROCEDURE_NAME) rn,
+          p.OBJECT_TYPE || ' ' || p.OWNER || '.' || p.OBJECT_NAME ||
+          nvl2(p.PROCEDURE_NAME, '.' || p.PROCEDURE_NAME, null) name,
+          i.SIGNATURE
+     from all_procedures p,
+          all_identifiers i
+    where p.OWNER = p_owner
+      and p.OBJECT_NAME not like p_ignore_prefix || '%'
+      and p.PARALLEL = 'YES'
+      and i.OWNER = p.OWNER
+      and i.OBJECT_TYPE = p.OBJECT_TYPE
+      and i.OBJECT_NAME = p.OBJECT_NAME
+      and i.NAME = p.PROCEDURE_NAME
+      )
+   loop
+    v_lines_count := p.rn; 
+    if p.rn = 1 then
+      dbms_output.put_line(
+      '*** The parallel-enabled functions is absent in Tibero');
+    end if;
+    dbms_output.put_line(p.rn||' '||p.name);
+    v_dummy := print_ref_list(
+                    p_owner => p_owner,
+                    p_ignore_prefix => p_ignore_prefix,
+                    p_signature => p.signature,
+                    p_type => 'FUNCTION',
+                    p_usage => 'CALL'
+                    );
+   end loop;
+   if v_lines_count > 0 then 
+    dbms_output.put_line('...You can use conditional compilation to exclude PARALLEL_ENABLE clause in Tibero');
+   end if;
+  return v_lines_count;
+end chk_functions;
 -- Checking for new keyword
 function chk_new_keyword(
   p_owner varchar2 := user,
@@ -121,8 +196,8 @@ s.OWNER, s.NAME, s.TYPE, s.LINE
     v_lines_count := r.rn; 
           if r.rn = 1 then
             dbms_output.put_line(
-            'The keyword "new" in the type constructor expressions is optional in Oracle and is absent in Tibero');
-            dbms_output.put_line('Reference list');
+            '*** The keyword "new" in the type constructor expressions is optional in Oracle and is absent in Tibero');
+            dbms_output.put_line(' Reference list');
           end if;
           dbms_output.put_line(r.rn||' '||r.type||' '||r.owner||'.'||r.name||' line '||r.line);
     end loop;
@@ -213,31 +288,18 @@ begin
        end if;
        v_warning := true;
     -- REFERENCE list
-    for r in (select
-               row_number() over( order by i.OWNER,i.OBJECT_NAME,i.OBJECT_TYPE,i.LINE)rn,
-               i.SIGNATURE, 
-               i.OWNER,
-               i.OBJECT_NAME,
-               i.OBJECT_TYPE,
-               i.LINE
-          from all_identifiers i
-         where i.OWNER = p_owner
-           and i.OBJECT_NAME not like p_ignore_prefix||'%'
-           and i.TYPE = 'EXCEPTION'
-           and i.USAGE = 'REFERENCE'
-           and i.SIGNATURE = c.SIGNATURE
-           ) loop
-          v_lines_count := v_lines_count + 1; 
-          if r.rn = 1 then
-            dbms_output.put_line('Reference list');
-          end if;
-          dbms_output.put_line(c.rn||'.'||r.rn||' '||r.object_type||' '||r.owner||'.'||r.object_name||' line '||r.line);
-    end loop;  
+    v_lines_count := v_lines_count + print_ref_list(
+                                        p_owner => p_owner,
+                                        p_ignore_prefix => p_ignore_prefix,
+                                        p_signature => c.signature,
+                                        p_type => 'EXCEPTION',
+                                        p_usage => 'REFERENCE'
+                                        );
     end if;
     v_err_code := null;
   end loop;
   if v_warning then 
-    dbms_output.put_line('You need to use conditional compilation to define different system error codes for Tibero and Oracle');
+    dbms_output.put_line('...You need to use conditional compilation to define different system error codes for Tibero and Oracle');
   end if;
   return v_lines_count;
 end chk_excptns;
@@ -251,11 +313,16 @@ procedure Run(
  begin
  dbms_output.enable(null);
  dbms_output.put_line('Check exceptions...');
+ dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'chk_excptns');
  v_lines_count := chk_excptns(p_owner,p_ignore_prefix);
  dbms_output.put_line('Check other issues...');
+ dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'chk_new_keyword');
  v_lines_count := v_lines_count + chk_new_keyword(p_owner,p_ignore_prefix);
+ dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'chk_functions');
+ v_lines_count := v_lines_count + chk_functions(p_owner,p_ignore_prefix);
  dbms_output.put_line('***');
  dbms_output.put_line(v_lines_count||' lines need to be rewritten for migration to Tibero');
+ dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'count analyzable lines');
   SELECT count(*)
     into v_lines_count
     FROM all_plsql_object_settings s, all_source c
@@ -265,6 +332,7 @@ procedure Run(
      and c.NAME = s.NAME
      and c.TYPE = s.TYPE;
   dbms_output.put_line(v_lines_count||' analyzable lines of PL/SQL code in '||p_owner||' scheme(compiled with plscope_settings=''IDENTIFIERS:ALL'')');
+  dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'count total lines');
   select count(*)
    into v_lines_count
    from all_source s
