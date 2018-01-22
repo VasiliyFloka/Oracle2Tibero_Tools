@@ -104,12 +104,53 @@ function print_ref_list(
            ) loop
           v_lines_count := v_lines_count + 1; 
           if r.rn = 1 then
-            dbms_output.put_line(' Reference list');
+            dbms_output.put_line(chr(9)||'Reference list');
           end if;
-          dbms_output.put_line(r.rn||' '||r.object_type||' '||r.owner||'.'||r.object_name||' line '||r.line);
+          dbms_output.put_line(chr(9)||r.rn||')'||r.object_type||' '||r.owner||'.'||r.object_name||' line '||r.line);
     end loop;
     return v_lines_count; 
-end print_ref_list;    
+end print_ref_list; 
+-- checking for missing types
+function chk_args(
+  p_owner varchar2 := user,
+  p_ignore_prefix varchar2 := c_ignore_prefix
+  ) return  int is
+v_lines_count int := 0;
+begin
+  for p in (
+  select row_number() over(partition by a.TYPE_NAME order by p.OWNER, p.OBJECT_NAME, p.OBJECT_TYPE, p.PROCEDURE_NAME) rn,
+         a.TYPE_NAME,
+         i.TYPE,
+         i.SIGNATURE,
+         p.OBJECT_TYPE || ' ' || p.OWNER || '.' || p.OBJECT_NAME ||
+         nvl2(p.PROCEDURE_NAME, '.' || p.PROCEDURE_NAME, null) name
+    from all_arguments a, all_procedures p, all_identifiers i
+   where a.OWNER = p_owner
+     and (a.TYPE_NAME = 'ANYTYPE' or a.TYPE_NAME like 'JSON%')
+     and a.OBJECT_ID = p.OBJECT_ID
+     and a.SUBPROGRAM_ID = p.SUBPROGRAM_ID
+     and a.OWNER = i.OWNER
+     and a.OBJECT_NAME = i.NAME
+     and p.OBJECT_TYPE = i.OBJECT_TYPE
+     and i.USAGE = 'DECLARATION'
+     and i.OBJECT_NAME not like p_ignore_prefix || '%')
+   loop
+    v_lines_count := v_lines_count + 1;
+    if p.rn = 1 then
+      dbms_output.put_line(
+      '*** The '||p.type_name||' is absent in Tibero');
+    end if;
+    dbms_output.put_line(p.rn||'.'||p.name);
+    v_lines_count := v_lines_count + print_ref_list(
+                    p_owner => p_owner,
+                    p_ignore_prefix => p_ignore_prefix,
+                    p_signature => p.signature,
+                    p_type => p.type,
+                    p_usage => 'CALL'
+                    );
+   end loop;
+  return v_lines_count;
+end chk_args;   
 -- search for the parallel-enabled functions
 function chk_functions(
   p_owner varchar2 := user,
@@ -139,7 +180,7 @@ begin
       dbms_output.put_line(
       '*** The parallel-enabled functions is absent in Tibero');
     end if;
-    dbms_output.put_line(p.rn||' '||p.name);
+    dbms_output.put_line(p.rn||'.'||p.name);
     v_dummy := print_ref_list(
                     p_owner => p_owner,
                     p_ignore_prefix => p_ignore_prefix,
@@ -197,9 +238,9 @@ s.OWNER, s.NAME, s.TYPE, s.LINE
           if r.rn = 1 then
             dbms_output.put_line(
             '*** The keyword "new" in the type constructor expressions is optional in Oracle and is absent in Tibero');
-            dbms_output.put_line(' Reference list');
+            dbms_output.put_line(chr(9)||'Reference list');
           end if;
-          dbms_output.put_line(r.rn||' '||r.type||' '||r.owner||'.'||r.name||' line '||r.line);
+          dbms_output.put_line(chr(9)||r.rn||'.'||r.type||' '||r.owner||'.'||r.name||' line '||r.line);
     end loop;
     return v_lines_count;
 end chk_new_keyword;    
@@ -280,7 +321,7 @@ begin
            end if;
     if not v_err_code between -20999 and -20000 then
       v_lines_count := v_lines_count + 1;
-       dbms_output.put_line(c.rn||'. Exception '||c.name||'('||c.object_type||' '||c.owner||'.'||c.object_name||' line '||c.line||')'||
+       dbms_output.put_line(c.rn||'.Exception '||c.name||'('||c.object_type||' '||c.owner||'.'||c.object_name||' line '||c.line||')'||
        ' init with error code '||v_err_code || '(line '||c.assignment_LINE||')' );
        v_ExceptionName := getExceptionName(v_err_code);
        if v_ExceptionName is not null then
@@ -320,6 +361,8 @@ procedure Run(
  v_lines_count := v_lines_count + chk_new_keyword(p_owner,p_ignore_prefix);
  dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'chk_functions');
  v_lines_count := v_lines_count + chk_functions(p_owner,p_ignore_prefix);
+ dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'chk_args');
+ v_lines_count := v_lines_count + chk_args(p_owner,p_ignore_prefix);
  dbms_output.put_line('***');
  dbms_output.put_line(v_lines_count||' lines need to be rewritten for migration to Tibero');
  dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'count analyzable lines');

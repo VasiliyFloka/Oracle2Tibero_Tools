@@ -12,22 +12,37 @@ At the moment, only the use of Oracle system error codes is checked and some oth
     SQL> set serveroutput on
     SQL> exec tmax_check4migrate.run
     Check exceptions...
-    1. Exception E_OBJECT_NOT_EXISTS(PROCEDURE HR.P1 line 2) init with error code -4043(line 3)
+    1.Exception E_OBJECT_NOT_EXISTS(PROCEDURE HR.P1 line 2) init with error code -4043(line 3)
     ...replace it to HR.TMAX_ERRPKG.E_OBJECT_NOT_EXISTS
-    Reference list
-    1 PROCEDURE HR.P1 line 15
-    2 PROCEDURE HR.P1 line 22
+      Reference list
+      1)PROCEDURE HR.P1 line 18
+      2)PROCEDURE HR.P1 line 25
     ...You need to use conditional compilation to define different system error codes for Tibero and Oracle
     Check other issues...
     *** The keyword "new" in the type constructor expressions is optional in Oracle and is absent in Tibero
-    Reference list
-    1 PROCEDURE HR.P1 line 27
+      Reference list
+      1.PROCEDURE HR.P1 line 30
     *** The parallel-enabled functions is absent in Tibero
-    1 PACKAGE HR.PARALLEL_PTF_API.TEST_PTF
-    Reference list
-    1 PROCEDURE HR.P1 line 34
+    1.PACKAGE HR.PARALLEL_PTF_API.TEST_PTF
+      Reference list
+      1)PROCEDURE HR.P1 line 37
     ...You can use conditional compilation to exclude PARALLEL_ENABLE clause in Tibero
+    *** The ANYTYPE is absent in Tibero
+    1.FUNCTION HR.CREATE_A_TYPE
+      Reference list
+      1)PROCEDURE HR.P1 line 48
+    2.PACKAGE HR.TEST1PKG.CREATE_A_TYPE2
+      Reference list
+      1)PROCEDURE HR.P1 line 61
+    *** The JSON_ARRAY_T is absent in Tibero
+    1.FUNCTION HR.JSON_F1
+      Reference list
+      1)PROCEDURE HR.P1 line 57
+    2.PACKAGE HR.TEST1PKG.JSON_F1
+      Reference list
+      1)PROCEDURE HR.P1 line 58
     ***
-    5 lines need to be rewritten for migration to Tibero
-    112 analyzable lines of PL/SQL code in HR scheme(compiled with plscope_settings='IDENTIFIERS:ALL')
-    383 total lines of PL/SQL code in HR scheme
+    13 lines need to be rewritten for migration to Tibero
+    214 analyzable lines of PL/SQL code in HR scheme(compiled with plscope_settings='IDENTIFIERS:ALL')
+    485 total lines of PL/SQL code in HR scheme
+
