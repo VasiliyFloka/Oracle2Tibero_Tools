@@ -1,5 +1,4 @@
 create or replace package tmax_check4migrate is
-
   -- Author  : Vasiliy@Floka.ru
   -- Created : 29.12.2017 13:08:54
   -- Purpose : Checking for known migration issues from Oracle to Tibero
@@ -42,9 +41,9 @@ for c in (select
              i.OBJECT_NAME,
              i.NAME
         from all_identifiers i
-       where i.OWNER = p_owner
+       where (i.OWNER,i.OBJECT_NAME) in (select p_owner,p_err_pck_name from dual union all
+                                         select 'SYS','STANDARD' from dual )
          and i.OBJECT_TYPE = 'PACKAGE'
-         and i.OBJECT_NAME = p_err_pck_name
          and i.TYPE = 'EXCEPTION'
          and i.USAGE = 'DECLARATION'
          ) loop
@@ -57,7 +56,11 @@ for c in (select
             end;';
             begin 
             execute immediate v_exec_code using out v_err_code;
-            v_exc_tab(v_err_code):= c.owner||'.'||c.object_name||'.'||c.name;
+            if c.owner = 'SYS' then
+              v_exc_tab(v_err_code):= c.name;
+            else
+              v_exc_tab(v_err_code):= c.owner||'.'||c.object_name||'.'||c.name;
+            end if;
             exception when others then
               dbms_output.put_line(sqlerrm);
               dbms_output.put_line(v_exec_code);
@@ -201,38 +204,21 @@ function chk_new_keyword(
   ) return  int is
 v_lines_count int := 0;
 begin
-  for r in (  
-select 
-row_number() over( order by s.OWNER, s.NAME, s.TYPE, s.LINE)rn,
-s.OWNER, s.NAME, s.TYPE, s.LINE
-  from all_identifiers r,
-       all_identifiers d,
-       all_identifiers a,
-       all_identifiers c,
-       all_source      s
- where r.OWNER = p_owner
-   and r.TYPE = 'OBJECT'
-   and r.USAGE = 'REFERENCE'
-   and r.OBJECT_NAME not like p_ignore_prefix||'%'
-   and r.OWNER = d.OWNER
-   and r.OBJECT_NAME = d.OBJECT_NAME
-   and r.OBJECT_TYPE = d.OBJECT_TYPE
-   and r.LINE = d.LINE
-   and d.TYPE = 'VARIABLE'
-   and d.USAGE = 'DECLARATION'
-   and a.SIGNATURE = d.SIGNATURE
-   and a.USAGE = 'ASSIGNMENT'
-   and c.OWNER = r.OWNER
-   and c.NAME = r.NAME
-   and c.TYPE = 'FUNCTION'
-   and c.USAGE = 'CALL'
-   and c.OBJECT_TYPE = a.OBJECT_TYPE
-   and c.OBJECT_NAME = a.OBJECT_NAME
-   and s.OWNER = c.OWNER
-   and s.TYPE = c.OBJECT_TYPE
-   and s.NAME = c.OBJECT_NAME
-   and s.LINE between a.LINE and c.LINE
-   and upper(s.TEXT) like '%NEW %'
+  for r in ( 
+    select row_number() over(order by s.OWNER, s.NAME, s.TYPE, s.LINE) rn,
+           s.OWNER,
+           s.NAME,
+           s.TYPE,
+           s.LINE
+      from all_source s, all_identifiers i
+     where s.OWNER = p_owner
+       and s.NAME not like p_ignore_prefix || '%'
+       and upper(s.TEXT) like '%:=%NEW %'
+       and i.OWNER = s.OWNER
+       and i.OBJECT_NAME = s.NAME
+       and i.OBJECT_TYPE = s.TYPE
+       and i.LINE = s.LINE
+       and i.USAGE in ('ASSIGNMENT', 'CALL')
     )loop
     v_lines_count := r.rn; 
           if r.rn = 1 then
@@ -256,22 +242,22 @@ function chk_excptns(
   v_ExceptionName varchar2(c_exc_name_length);
   v_lines_count int := 0;
 begin
-  for c in (select
-            row_number() over( order by i.OWNER,i.OBJECT_NAME,i.OBJECT_TYPE,i.LINE)rn,
-               i.SIGNATURE, 
-               i.OWNER,
-               i.OBJECT_NAME,
-               i.NAME,
-               i.LINE,
-               a.OBJECT_TYPE,
-               a.LINE ASSIGNMENT_LINE
-          from all_identifiers i, all_identifiers a
-         where i.OWNER = p_owner
-           and i.OBJECT_NAME not like p_ignore_prefix||'%'
-           and i.TYPE = 'EXCEPTION'
-           and i.USAGE = 'DECLARATION'
-           and i.SIGNATURE = a.SIGNATURE
-           and a.USAGE = 'ASSIGNMENT'
+  for c in (
+    select i.SIGNATURE,
+           i.OWNER,
+           i.OBJECT_NAME,
+           i.NAME,
+           i.LINE,
+           a.OBJECT_TYPE,
+           a.LINE ASSIGNMENT_LINE
+      from all_identifiers i, all_identifiers a
+     where i.OWNER = p_owner
+       and i.OBJECT_NAME not like p_ignore_prefix || '%'
+       and i.TYPE = 'EXCEPTION'
+       and i.USAGE = 'DECLARATION'
+       and i.SIGNATURE = a.SIGNATURE
+       and a.USAGE = 'ASSIGNMENT'
+     order by i.OWNER, i.OBJECT_NAME, i.OBJECT_TYPE, i.LINE
            ) loop
            if c.object_type = 'PACKAGE' then
              v_exec_code :=
@@ -321,7 +307,7 @@ begin
            end if;
     if not v_err_code between -20999 and -20000 then
       v_lines_count := v_lines_count + 1;
-       dbms_output.put_line(c.rn||'.Exception '||c.name||'('||c.object_type||' '||c.owner||'.'||c.object_name||' line '||c.line||')'||
+       dbms_output.put_line(v_lines_count||'.Exception '||c.name||'('||c.object_type||' '||c.owner||'.'||c.object_name||' line '||c.line||')'||
        ' init with error code '||v_err_code || '(line '||c.assignment_LINE||')' );
        v_ExceptionName := getExceptionName(v_err_code);
        if v_ExceptionName is not null then
@@ -370,6 +356,7 @@ procedure Run(
     into v_lines_count
     FROM all_plsql_object_settings s, all_source c
    where s.PLSCOPE_SETTINGS like '%IDENTIFIERS:ALL%'
+     and s.OWNER = p_owner
      and c.NAME not like p_ignore_prefix || '%'
      and c.OWNER = s.OWNER
      and c.NAME = s.NAME
