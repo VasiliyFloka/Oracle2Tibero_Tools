@@ -17,6 +17,11 @@ procedure Run(
   p_owner varchar2 := user,
   p_ignore_prefix varchar2 := c_ignore_prefix
   );
+-- Recompile for PLScope
+procedure Recompile4PLScope(
+  p_owner varchar2 := user,
+  p_ignore_prefix varchar2 := c_ignore_prefix
+  );
 end tmax_check4migrate;
 /
 create or replace package body tmax_check4migrate is
@@ -330,6 +335,33 @@ begin
   end if;
   return v_lines_count;
 end chk_excptns;
+-- Recompile for PLScope
+procedure Recompile4PLScope(
+  p_owner varchar2 := user,
+  p_ignore_prefix varchar2 := c_ignore_prefix
+  ) is
+v_ddl varchar2(32767);
+begin
+  dbms_output.enable(null);
+  execute immediate 
+  'ALTER SESSION SET plscope_settings="IDENTIFIERS:ALL"';
+  for c in (
+ SELECT distinct replace(c.type,' BODY')||' "'||c.owner||'"."'||c.name||'"' obj
+   FROM all_plsql_object_settings c
+  where c.PLSCOPE_SETTINGS not like '%IDENTIFIERS:ALL%'
+    and c.OWNER = p_owner
+    and c.NAME not like p_ignore_prefix || '%'
+   )loop
+     begin
+      v_ddl := 'alter '||c.obj||' compile';
+      execute immediate v_ddl; 
+     exception
+       when others then
+         dbms_output.put_line(c.obj);
+         dbms_output.put_line(sqlerrm);
+     end;     
+   end loop;
+end Recompile4PLScope;
 -- Run checking
 procedure Run(
   p_owner varchar2 := user,

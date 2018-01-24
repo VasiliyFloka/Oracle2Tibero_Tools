@@ -8,7 +8,7 @@ Requires a Oracle database server side installation.
 At the moment, only the use of Oracle system error codes is checked and some other issues.
 ## How to use (example)
     SQL> ALTER SESSION SET plscope_settings='IDENTIFIERS:ALL';
-    SQL> alter procedure p1 compile reuse settings;
+    SQL> alter procedure p1 compile;
     SQL> set serveroutput on
     SQL> exec tmax_check4migrate.run
     Check exceptions...
