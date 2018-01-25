@@ -97,25 +97,26 @@ function print_ref_list(
   v_lines_count int := 0;
   begin
     for r in (
-      select row_number() over(order by i.OWNER, i.OBJECT_NAME, i.OBJECT_TYPE, i.LINE) rn,
-             i.SIGNATURE,
+      select count(*) cnt,
              i.OWNER,
              i.OBJECT_NAME,
              i.OBJECT_TYPE,
-             i.LINE
+             listagg(i.LINE,',') WITHIN GROUP(order by i.LINE)lines_list
         from all_identifiers i
        where i.OWNER = p_owner
          and i.OBJECT_NAME not like p_ignore_prefix || '%'
          and i.TYPE = p_type
          and i.USAGE = p_usage
          and i.SIGNATURE = p_signature
+       group by i.OBJECT_TYPE,i.OWNER,i.OBJECT_NAME
+       order by i.OBJECT_TYPE,i.OBJECT_NAME 
            ) loop
-          v_lines_count := v_lines_count + 1; 
-          if r.rn = 1 then
-            dbms_output.put_line(chr(9)||'Reference list');
-          end if;
-          dbms_output.put_line(chr(9)||r.rn||')'||r.object_type||' '||r.owner||'.'||r.object_name||' line '||r.line);
-    end loop;
+      if v_lines_count = 0 then
+        dbms_output.put_line(chr(9)||'Reference list');
+      end if;
+      dbms_output.put_line(chr(9)||to_char(v_lines_count+1)||')'||r.object_type||' '||r.owner||'.'||r.object_name||' line(s) '||r.lines_list);
+      v_lines_count := v_lines_count + r.cnt;  
+   end loop;
     return v_lines_count; 
 end print_ref_list; 
 -- checking for missing types
@@ -210,13 +211,14 @@ function chk_new_keyword(
 v_lines_count int := 0;
 begin
   for r in ( 
-    select row_number() over(order by s.OWNER, s.NAME, s.TYPE, s.LINE) rn,
+    select count(*) cnt,
            s.OWNER,
            s.NAME,
            s.TYPE,
-           s.LINE
+           listagg(s.LINE,',')  WITHIN GROUP(order by s.LINE) lines_list
       from all_source s, all_identifiers i
      where s.OWNER = p_owner
+       and s.TYPE not like  'JAVA%'
        and s.NAME not like p_ignore_prefix || '%'
        and upper(s.TEXT) like '%:=%NEW %'
        and i.OWNER = s.OWNER
@@ -224,14 +226,16 @@ begin
        and i.OBJECT_TYPE = s.TYPE
        and i.LINE = s.LINE
        and i.USAGE in ('ASSIGNMENT', 'CALL')
+     group by s.TYPE, s.OWNER,s.NAME
+     order by s.TYPE, s.NAME
     )loop
-    v_lines_count := r.rn; 
-          if r.rn = 1 then
+          if v_lines_count = 0 then
             dbms_output.put_line(
             '*** The keyword "new" in the type constructor expressions is optional in Oracle and is absent in Tibero');
             dbms_output.put_line(chr(9)||'Reference list');
           end if;
-          dbms_output.put_line(chr(9)||r.rn||'.'||r.type||' '||r.owner||'.'||r.name||' line '||r.line);
+          dbms_output.put_line(chr(9)||to_char(v_lines_count+1)||'.'||r.type||' '||r.owner||'.'||r.name||' line(s) '||r.lines_list);
+    v_lines_count := v_lines_count + r.cnt;
     end loop;
     return v_lines_count;
 end chk_new_keyword;    
@@ -390,6 +394,7 @@ procedure Run(
    where s.PLSCOPE_SETTINGS like '%IDENTIFIERS:ALL%'
      and s.OWNER = p_owner
      and c.NAME not like p_ignore_prefix || '%'
+     and c.NAME not like  'SYS_PLSQL_%'
      and c.OWNER = s.OWNER
      and c.NAME = s.NAME
      and c.TYPE = s.TYPE;
@@ -399,8 +404,29 @@ procedure Run(
    into v_lines_count
    from all_source s
   where s.OWNER = p_owner
-    and s.NAME not like p_ignore_prefix || '%';
+    and s.TYPE not like  'JAVA%'
+    and s.NAME not like p_ignore_prefix || '%'
+    and s.NAME not like  'SYS_PLSQL_%';
  dbms_output.put_line(v_lines_count||' total lines of PL/SQL code in '||p_owner||' scheme');
+ --
+ dbms_output.put_line('***');
+ dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'SYS referenced objects list');
+ dbms_output.put_line('SYS referenced objects list');
+ for d in (
+select d.REFERENCED_TYPE,
+       d.REFERENCED_NAME,
+       listagg(d.name, ',') WITHIN GROUP(order by d.name) REFERENCE_LIST
+  from all_dependencies d
+ where d.OWNER = p_owner
+   and d.NAME not like p_ignore_prefix || '%'
+   and d.REFERENCED_OWNER = 'SYS'
+   and d.REFERENCED_NAME != 'STANDARD'
+   and d.REFERENCED_NAME != 'DBMS_STANDARD'
+ group by d.REFERENCED_TYPE, d.REFERENCED_NAME
+ order by d.REFERENCED_TYPE, d.REFERENCED_NAME
+)loop
+dbms_output.put_line(d.referenced_type||' '||d.referenced_name||' : '||d.reference_list);
+end loop;
  end Run;
 end tmax_check4migrate;
 /
