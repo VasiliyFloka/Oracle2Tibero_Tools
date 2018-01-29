@@ -122,6 +122,76 @@ create or replace package tmax_ErrPkg is
   -01427
   $END
   );
+  /* ORA-25235: fetched all messages in current transaction from . */
+  ------------------------------
+  e_fetched_all_messages exception;
+  pragma exception_init(e_fetched_all_messages,
+  $if tmax_Constpkg.c_isTibero $THEN
+  -?????
+  $ELSE
+  -25235
+  $END
+  );
+  /* ORA-25228: timeout or end-of-fetch during message dequeue from . */
+  ------------------------------
+  e_timeout_or_end_of_fetch exception;
+  pragma exception_init(e_timeout_or_end_of_fetch,
+  $if tmax_Constpkg.c_isTibero $THEN
+  -?????
+  $ELSE
+  -25228
+  $END
+  );
+  /* ORA-23401: materialized view ""."" does not exist */
+  ------------------------------
+  e_materialized_view_not_exist exception;
+  pragma exception_init(e_materialized_view_not_exist,
+  $if tmax_Constpkg.c_isTibero $THEN
+  -?????
+  $ELSE
+  -23401
+  $END
+  );
+  /* ORA-02292: integrity constraint (.) violated - child record found */
+  ------------------------------
+  e_child_record_found exception;
+  pragma exception_init(e_child_record_found,
+  $if tmax_Constpkg.c_isTibero $THEN
+  -?????
+  $ELSE
+  -2292
+  $END
+  );
+  /* ORA-02291: integrity constraint (.) violated - parent key not found */
+  ------------------------------
+  e_parent_key_not_found exception;
+  pragma exception_init(e_parent_key_not_found,
+  $if tmax_Constpkg.c_isTibero $THEN
+  -?????
+  $ELSE
+  -2291
+  $END
+  );
+  /* ORA-01843: not a valid month */
+  ------------------------------
+  e_not_a_valid_month exception;
+  pragma exception_init(e_not_a_valid_month,
+  $if tmax_Constpkg.c_isTibero $THEN
+  -?????
+  $ELSE
+  -1843
+  $END
+  );
+  /* ORA-00054: resource busy and acquire with NOWAIT specified or timeout expired */
+  ------------------------------
+  e_resource_busy_and_acquire_with_NOWAIT_specified_or_timeout_expired exception;
+  pragma exception_init(e_resource_busy_and_acquire_with_NOWAIT_specified_or_timeout_expired,
+  $if tmax_Constpkg.c_isTibero $THEN
+  -?????
+  $ELSE
+  -54
+  $END
+  );
   procedure put_line(
     p_err int := sqlcode,
     p_msg varchar2 := sqlerrm);

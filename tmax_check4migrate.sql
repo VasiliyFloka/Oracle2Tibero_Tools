@@ -29,6 +29,8 @@ create or replace package body tmax_check4migrate is
 c_exc_name_length constant int := 128;
 type t_exc_tab is table of varchar2(c_exc_name_length) index by pls_integer;
 v_exc_tab t_exc_tab;
+type t_not_exists_exc_tab is table of int index by pls_integer;
+v_not_exists_exc_tab t_not_exists_exc_tab;
 -- load exceptions from error package
 procedure init_exc_tab(
   p_owner varchar2 := user,
@@ -82,7 +84,12 @@ function getExceptionName(p_ErrCode int) return varchar2
      return v_exc_tab(p_ErrCode);
    exception
      when no_data_found then
-       -- To do: add save not exist error codes
+       begin
+         v_not_exists_exc_tab(p_ErrCode):=v_not_exists_exc_tab(p_ErrCode)+1;
+       exception
+       when no_data_found then
+         v_not_exists_exc_tab(p_ErrCode):=1;
+       end;
      return null;
    end;
  end getExceptionName;
@@ -250,6 +257,8 @@ function chk_excptns(
   v_exc_pragma varchar2(32767);
   v_ExceptionName varchar2(c_exc_name_length);
   v_lines_count int := 0;
+  v_i int;
+  v_err_msg varchar2(32767);
 begin
   for c in (
     select i.SIGNATURE,
@@ -336,6 +345,35 @@ begin
   end loop;
   if v_warning then 
     dbms_output.put_line('...You need to use conditional compilation to define different system error codes for Tibero and Oracle');
+  
+  v_i := v_not_exists_exc_tab.first;
+  if v_i is not null  then
+    dbms_output.put_line('Following error codes did not find in Tmax_ErrPkg package, need to add:');
+  end if;
+  while v_i is not null 
+    loop
+      --dbms_output.put_line(v_i||' - '||v_not_exists_exc_tab(v_i)||' references'); 
+      begin
+        execute immediate
+        'declare
+         e_ exception;
+         pragma exception_init(e_,'||to_char(v_i)||');
+        begin raise e_; end;';
+      exception when others then
+        v_err_msg:= replace(replace(sqlerrm,'ORA-'||lpad(abs(v_i),5,'0')||': '),' ','_');
+      dbms_output.put_line('/* '||sqlerrm||' */'); 
+      dbms_output.put_line(lpad('-',30,'-')); 
+      dbms_output.put_line('e_'||v_err_msg||' exception;');
+      dbms_output.put_line('pragma exception_init(e_'||v_err_msg||',');
+      dbms_output.put_line('$if tmax_Constpkg.c_isTibero $THEN');
+      dbms_output.put_line('-?????');
+      dbms_output.put_line('$ELSE');
+      dbms_output.put_line(v_i);
+      dbms_output.put_line('$END');
+      dbms_output.put_line(');');
+      end; 
+      v_i := v_not_exists_exc_tab.next(v_i);
+    end loop;
   end if;
   return v_lines_count;
 end chk_excptns;
