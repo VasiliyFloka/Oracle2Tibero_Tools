@@ -22,15 +22,31 @@ procedure Recompile4PLScope(
   p_owner varchar2 := user,
   p_ignore_prefix varchar2 := c_ignore_prefix
   );
+-- replace source code and save into collection
+procedure rplc(
+                p_OWNER varchar2,
+                p_NAME  varchar2,
+                p_TYPE  varchar2,
+                p_lines_list varchar2,
+                p_oldsub varchar2,
+                p_newsub varchar2);
+-- print replaced source code
+procedure print_replaced_source_code;                
 end tmax_check4migrate;
 /
 create or replace package body tmax_check4migrate is
 -- 
-c_exc_name_length constant int := 128;
-type t_exc_tab is table of varchar2(c_exc_name_length) index by pls_integer;
+c_name_length constant int := 128;
+type t_exc_tab is table of varchar2(c_name_length) index by pls_integer;
 v_exc_tab t_exc_tab;
 type t_not_exists_exc_tab is table of int index by pls_integer;
 v_not_exists_exc_tab t_not_exists_exc_tab;
+--
+type t_lines is table of varchar2(32767) index by pls_integer;
+type t_TYPE is table of t_lines index by varchar2(c_name_length);
+type t_NAME is table of t_TYPE index by varchar2(c_name_length);
+type t_OWNER is table of t_NAME index by varchar2(c_name_length);
+v_source_code t_OWNER;
 -- load exceptions from error package
 procedure init_exc_tab(
   p_owner varchar2 := user,
@@ -255,7 +271,7 @@ function chk_excptns(
   v_warning boolean := false;
   v_exec_code varchar2(32767);
   v_exc_pragma varchar2(32767);
-  v_ExceptionName varchar2(c_exc_name_length);
+  v_ExceptionName varchar2(c_name_length);
   v_lines_count int := 0;
   v_i int;
   v_err_msg varchar2(32767);
@@ -404,6 +420,74 @@ begin
      end;     
    end loop;
 end Recompile4PLScope;
+-- replace source code and save into collection
+procedure rplc(
+                p_OWNER varchar2,
+                p_NAME  varchar2,
+                p_TYPE  varchar2,
+                p_lines_list varchar2,
+                p_oldsub varchar2,
+                p_newsub varchar2)
+is
+v_exists boolean := false;
+begin
+  begin
+    v_exists:= v_source_code(p_OWNER)(p_NAME)(p_TYPE).exists(1); 
+  exception when no_data_found then
+  for s in (
+    select *
+      from all_source s
+     where s.OWNER = p_OWNER
+       and s.NAME = p_NAME
+       and s.TYPE = p_TYPE
+        )loop
+        v_source_code(s.OWNER)(s.NAME)(s.TYPE)(s.line) := s.text;
+  end loop; 
+  end;
+--
+for s in (
+ select regexp_substr(p_lines_list, '[^,]+', 1, level) line
+  from dual
+connect by regexp_substr(p_lines_list, '[^,]+', 1, level) is not null 
+)
+loop
+  v_source_code(p_OWNER)(p_NAME)(p_TYPE)(s.line):= 
+  regexp_replace(v_source_code(p_OWNER)(p_NAME)(p_TYPE)(s.line),p_oldsub,p_newsub,1,1,'i');
+  --dbms_output.put_line(v_source_code(p_OWNER)(p_NAME)(p_TYPE)(s.line));
+end loop;  
+end rplc;
+-- print replaced source code
+procedure print_replaced_source_code
+  is
+v_owner varchar2(c_name_length);
+v_name varchar2(c_name_length);
+v_type varchar2(c_name_length);
+begin
+  dbms_output.enable(null);
+v_owner := v_source_code.first;
+while v_owner is not null 
+loop
+dbms_output.put_line('prompt schema is '||v_owner);
+ v_name := v_source_code(v_owner).first;
+ while v_name is not null 
+ loop
+ dbms_output.put_line('prompt name is '||v_name);
+  v_type := v_source_code(v_owner)(v_name).first;
+  while v_type is not null 
+  loop
+    dbms_output.put_line('prompt type is '||v_type);
+    for v_line in v_source_code(v_owner)(v_name)(v_type).first..v_source_code(v_owner)(v_name)(v_type).last
+      loop
+        dbms_output.put_line(replace(replace(v_source_code(v_owner)(v_name)(v_type)(v_line),chr(13)),chr(10)));
+      end loop;
+      dbms_output.put_line('/');
+    v_type :=  v_source_code(v_owner)(v_name).next(v_type);
+  end loop;
+ v_name :=  v_source_code(v_owner).next(v_name); 
+ end loop;  
+v_owner := v_source_code.next(v_owner);
+end loop;
+end print_replaced_source_code;
 -- Run checking
 procedure Run(
   p_owner varchar2 := user,
