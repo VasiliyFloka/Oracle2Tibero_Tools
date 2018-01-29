@@ -184,8 +184,8 @@ create or replace package tmax_ErrPkg is
   );
   /* ORA-00054: resource busy and acquire with NOWAIT specified or timeout expired */
   ------------------------------
-  e_resource_busy_and_acquire_with_NOWAIT_specified_or_timeout_expired exception;
-  pragma exception_init(e_resource_busy_and_acquire_with_NOWAIT_specified_or_timeout_expired,
+  e_resource_busy exception;
+  pragma exception_init(e_resource_busy,
   $if tmax_Constpkg.c_isTibero $THEN
   -?????
   $ELSE
