@@ -192,6 +192,16 @@ create or replace package tmax_ErrPkg is
   -54
   $END
   );
+  /*ORA-24344: success with compilation error*/
+  ------------------------------
+  e_success_with_compilation_err exception;
+  pragma exception_init(e_success_with_compilation_err,
+  $if tmax_Constpkg.c_isTibero $THEN
+  -?????
+  $ELSE
+  -24344
+  $END
+  );
   procedure put_line(
     p_err int := sqlcode,
     p_msg varchar2 := sqlerrm);

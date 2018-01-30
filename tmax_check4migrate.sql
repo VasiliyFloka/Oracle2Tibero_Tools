@@ -15,7 +15,8 @@ function chk_excptns(
 -- Run checking
 procedure Run(
   p_owner varchar2 := user,
-  p_ignore_prefix varchar2 := c_ignore_prefix
+  p_ignore_prefix varchar2 := c_ignore_prefix,
+  p_modify boolean := false
   );
 -- Recompile for PLScope
 procedure Recompile4PLScope(
@@ -28,8 +29,9 @@ procedure rplc(
                 p_NAME  varchar2,
                 p_TYPE  varchar2,
                 p_lines_list varchar2,
-                p_oldsub varchar2,
-                p_newsub varchar2);
+                p_oldsub varchar2 default null,
+                p_newsub varchar2 default null,
+                p_to_comment boolean default false);
 -- print replaced source code
 procedure print_replaced_source_code;                
 end tmax_check4migrate;
@@ -115,7 +117,9 @@ function print_ref_list(
   p_ignore_prefix varchar2 := c_ignore_prefix,
   p_signature varchar2,
   p_type varchar2,
-  p_usage varchar2
+  p_usage varchar2,
+  p_oldsub varchar2 default null,
+  p_newsub varchar2 default null
   ) return int is
   v_lines_count int := 0;
   begin
@@ -139,6 +143,15 @@ function print_ref_list(
       end if;
       dbms_output.put_line(chr(9)||to_char(v_lines_count+1)||')'||r.object_type||' '||r.owner||'.'||r.object_name||' line(s) '||r.lines_list);
       v_lines_count := v_lines_count + r.cnt;  
+      if p_type = 'EXCEPTION' 
+        and p_newsub is not null then
+          rplc(p_owner => r.owner,
+                p_name => r.object_name,
+                p_type => r.object_type,
+                p_lines_list => r.lines_list,
+                p_oldsub => p_oldsub,
+                p_newsub => p_newsub);
+      end if;
    end loop;
     return v_lines_count; 
 end print_ref_list; 
@@ -259,6 +272,12 @@ begin
           end if;
           dbms_output.put_line(chr(9)||to_char(v_lines_count+1)||'.'||r.type||' '||r.owner||'.'||r.name||' line(s) '||r.lines_list);
     v_lines_count := v_lines_count + r.cnt;
+    rplc(p_owner => r.owner,
+                p_name => r.name,
+                p_type => r.type,
+                p_lines_list => r.lines_list,
+                p_oldsub => 'new ',
+                p_newsub => '/*new */');
     end loop;
     return v_lines_count;
 end chk_new_keyword;    
@@ -354,8 +373,17 @@ begin
                                         p_ignore_prefix => p_ignore_prefix,
                                         p_signature => c.signature,
                                         p_type => 'EXCEPTION',
-                                        p_usage => 'REFERENCE'
+                                        p_usage => 'REFERENCE',
+ p_oldsub => c.name||'|'||c.object_name||'.'||c.name||'|'||c.owner||'.'||c.object_name||'.'||c.name,
+ p_newsub => v_ExceptionName                               
                                         );
+    -- to comment 2 lines                                    
+    rplc(
+        p_owner => c.owner,
+        p_name => c.object_name,
+        p_type => c.object_type,
+        p_lines_list => c.line||','||c.assignment_LINE,
+        p_to_comment => true);                                       
     end if;
     v_err_code := null;
   end loop;
@@ -420,20 +448,19 @@ begin
      end;     
    end loop;
 end Recompile4PLScope;
--- replace source code and save into collection
-procedure rplc(
+-- load source code and save into collection
+procedure load_source_code(
                 p_OWNER varchar2,
                 p_NAME  varchar2,
-                p_TYPE  varchar2,
-                p_lines_list varchar2,
-                p_oldsub varchar2,
-                p_newsub varchar2)
+                p_TYPE  varchar2)
 is
 v_exists boolean := false;
 begin
   begin
     v_exists:= v_source_code(p_OWNER)(p_NAME)(p_TYPE).exists(1); 
   exception when no_data_found then
+    v_source_code(p_OWNER)(p_NAME)(p_TYPE)(0) := 
+      'CREATE OR REPLACE /* TMAX '||to_char(sysdate,'rr-mm-dd hh24:mi:ss')||' */';
   for s in (
     select *
       from all_source s
@@ -444,6 +471,23 @@ begin
         v_source_code(s.OWNER)(s.NAME)(s.TYPE)(s.line) := s.text;
   end loop; 
   end;
+end load_source_code;
+-- replace source code and save into collection
+procedure rplc(
+                p_OWNER varchar2,
+                p_NAME  varchar2,
+                p_TYPE  varchar2,
+                p_lines_list varchar2,
+                p_oldsub varchar2 default null,
+                p_newsub varchar2 default null,
+                p_to_comment boolean default false)
+is
+v_exists boolean := false;
+begin
+load_source_code(
+                  p_OWNER,
+                  p_NAME,
+                  p_TYPE);
 --
 for s in (
  select regexp_substr(p_lines_list, '[^,]+', 1, level) line
@@ -451,10 +495,17 @@ for s in (
 connect by regexp_substr(p_lines_list, '[^,]+', 1, level) is not null 
 )
 loop
+ if p_to_comment then
+  v_source_code(p_OWNER)(p_NAME)(p_TYPE)(s.line):='--'||
+     v_source_code(p_OWNER)(p_NAME)(p_TYPE)(s.line);  
+ else
   v_source_code(p_OWNER)(p_NAME)(p_TYPE)(s.line):= 
   regexp_replace(v_source_code(p_OWNER)(p_NAME)(p_TYPE)(s.line),p_oldsub,p_newsub,1,1,'i');
+ end if;
   --dbms_output.put_line(v_source_code(p_OWNER)(p_NAME)(p_TYPE)(s.line));
-end loop;  
+end loop; 
+exception when others then
+   Raise_application_error(-20000,p_OWNER||'.'||p_NAME||' '||p_TYPE,true);
 end rplc;
 -- print replaced source code
 procedure print_replaced_source_code
@@ -478,7 +529,11 @@ dbms_output.put_line('prompt schema is '||v_owner);
     dbms_output.put_line('prompt type is '||v_type);
     for v_line in v_source_code(v_owner)(v_name)(v_type).first..v_source_code(v_owner)(v_name)(v_type).last
       loop
-        dbms_output.put_line(replace(replace(v_source_code(v_owner)(v_name)(v_type)(v_line),chr(13)),chr(10)));
+        dbms_output.put_line(
+          replace(replace(
+            v_source_code(v_owner)(v_name)(v_type)(v_line)
+          ,chr(13)),chr(10))
+        );
       end loop;
       dbms_output.put_line('/');
     v_type :=  v_source_code(v_owner)(v_name).next(v_type);
@@ -488,14 +543,68 @@ dbms_output.put_line('prompt schema is '||v_owner);
 v_owner := v_source_code.next(v_owner);
 end loop;
 end print_replaced_source_code;
+-- modify_source_code
+procedure modify_source_code
+  is
+v_stmt clob;
+v_owner varchar2(c_name_length);
+v_name varchar2(c_name_length);
+v_type varchar2(c_name_length);
+v_sl varchar2(32767);
+begin
+  dbms_lob.createtemporary(v_stmt,true,dbms_lob.call);
+  dbms_output.enable(null);
+v_owner := v_source_code.first;
+while v_owner is not null 
+loop
+--dbms_output.put_line('prompt schema is '||v_owner);
+ v_name := v_source_code(v_owner).first;
+ while v_name is not null 
+ loop
+ --dbms_output.put_line('prompt name is '||v_name);
+  v_type := v_source_code(v_owner)(v_name).first;
+  while v_type is not null 
+  loop
+    --dbms_output.put_line('prompt type is '||v_type);
+    for v_line in v_source_code(v_owner)(v_name)(v_type).first..v_source_code(v_owner)(v_name)(v_type).last
+      loop
+        v_sl := v_source_code(v_owner)(v_name)(v_type)(v_line);
+        if v_sl is not null then
+        begin
+        dbms_lob.writeappend( v_stmt , length(v_sl), v_sl);
+        exception when others then
+          Raise_application_error(-20001, 'length='||length(v_sl)||' '||v_sl);
+        end;
+        end if;
+        --dbms_output.put_line(v_source_code(v_owner)(v_name)(v_type)(v_line));
+      end loop;
+      begin
+      execute immediate v_stmt;
+      exception 
+        when TMAX_ERRPKG.e_success_with_compilation_err then
+          null;
+        when others then
+          Raise_application_error(-20002, sqlerrm||chr(10)||substr(v_stmt,1,2000));
+      end;
+      dbms_lob.trim(v_stmt,0);
+      --dbms_output.put_line('/');
+    v_type :=  v_source_code(v_owner)(v_name).next(v_type);
+  end loop;
+ v_name :=  v_source_code(v_owner).next(v_name); 
+ end loop;  
+v_owner := v_source_code.next(v_owner);
+end loop;
+end modify_source_code;
 -- Run checking
 procedure Run(
   p_owner varchar2 := user,
-  p_ignore_prefix varchar2 := c_ignore_prefix
+  p_ignore_prefix varchar2 := c_ignore_prefix,
+  p_modify boolean := false
   )
   is
   v_lines_count int := 0;
  begin
+ v_source_code.delete;
  dbms_output.enable(null);
  dbms_output.put_line('Check exceptions...');
  dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'chk_excptns');
@@ -549,6 +658,10 @@ select d.REFERENCED_TYPE,
 )loop
 dbms_output.put_line(d.referenced_type||' '||d.referenced_name||' : '||d.reference_list);
 end loop;
+-- 
+if p_modify then
+  modify_source_code;
+end if;  
  end Run;
 end tmax_check4migrate;
 /
