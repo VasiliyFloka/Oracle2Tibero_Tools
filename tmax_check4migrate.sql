@@ -128,7 +128,11 @@ function print_ref_list(
              i.OWNER,
              i.OBJECT_NAME,
              i.OBJECT_TYPE,
-             listagg(i.LINE,',') WITHIN GROUP(order by i.LINE)lines_list
+             listagg(i.LINE,','
+ $if dbms_db_version.ver_le_12_2 $then
+       ON OVERFLOW TRUNCATE
+ $end             
+             ) WITHIN GROUP(order by i.LINE)lines_list
         from all_identifiers i
        where i.OWNER = p_owner
          and i.OBJECT_NAME not like p_ignore_prefix || '%'
@@ -251,7 +255,11 @@ begin
            s.OWNER,
            s.NAME,
            s.TYPE,
-           listagg(s.LINE,',')  WITHIN GROUP(order by s.LINE) lines_list
+           listagg(s.LINE,','
+ $if dbms_db_version.ver_le_12_2 $then
+       ON OVERFLOW TRUNCATE
+ $end           
+           )  WITHIN GROUP(order by s.LINE) lines_list
       from all_source s, all_identifiers i
      where s.OWNER = p_owner
        and s.TYPE not like  'JAVA%'
@@ -646,7 +654,11 @@ procedure Run(
  for d in (
 select d.REFERENCED_TYPE,
        d.REFERENCED_NAME,
-       listagg(d.name, ',') WITHIN GROUP(order by d.name) REFERENCE_LIST
+       listagg(d.name, ',' 
+ $if dbms_db_version.ver_le_12_2 $then
+       ON OVERFLOW TRUNCATE
+ $end
+       ) WITHIN GROUP(order by d.name) REFERENCE_LIST
   from all_dependencies d
  where d.OWNER = p_owner
    and d.NAME not like p_ignore_prefix || '%'
