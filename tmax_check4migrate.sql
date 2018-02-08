@@ -23,24 +23,8 @@ procedure Recompile4PLScope(
   p_owner varchar2 := user,
   p_ignore_prefix varchar2 := c_ignore_prefix
   );
--- replace source code and save into collection
-procedure rplc(
-                p_OWNER varchar2,
-                p_NAME  varchar2,
-                p_TYPE  varchar2,
-                p_lines_list varchar2,
-                p_oldsub varchar2 default null,
-                p_newsub varchar2 default null,
-                p_to_comment boolean default false);
 -- print replaced source code
-procedure print_replaced_source_code; 
---
-function Chk_XmlTable
-(
-  p_owner varchar2 := user,
-  p_ignore_prefix varchar2 := c_ignore_prefix,
-  p_modify boolean := false
-  )return int;               
+procedure print_replaced_source_code;             
 end tmax_check4migrate;
 /
 create or replace package body tmax_check4migrate is
@@ -56,6 +40,69 @@ type t_TYPE is table of t_lines index by varchar2(c_name_length);
 type t_NAME is table of t_TYPE index by varchar2(c_name_length);
 type t_OWNER is table of t_NAME index by varchar2(c_name_length);
 v_source_code t_OWNER;
+-- load source code and save into collection
+procedure load_source_code(
+                p_OWNER varchar2,
+                p_NAME  varchar2,
+                p_TYPE  varchar2)
+is
+v_exists boolean := false;
+begin
+  begin
+    v_exists:= v_source_code(p_OWNER)(p_NAME)(p_TYPE).exists(1); 
+  exception when no_data_found then
+    v_source_code(p_OWNER)(p_NAME)(p_TYPE)(0) := 
+      'CREATE OR REPLACE /* TMAX '||to_char(sysdate,'rr-mm-dd hh24:mi:ss')||' */';
+  for s in (
+    select *
+      from all_source s
+     where s.OWNER = p_OWNER
+       and s.NAME = p_NAME
+       and s.TYPE = p_TYPE
+        )loop
+        v_source_code(s.OWNER)(s.NAME)(s.TYPE)(s.line) := s.text;
+  end loop; 
+  end;
+end load_source_code;
+-- replace source code and save into collection
+procedure rplc(
+                p_OWNER varchar2,
+                p_NAME  varchar2,
+                p_TYPE  varchar2,
+                p_lines_list varchar2,
+                p_oldsub varchar2 default null,
+                p_newsub varchar2 default null,
+                p_to_comment boolean default false,
+                p_regexp boolean default true)
+is
+v_exists boolean := false;
+begin
+load_source_code(
+                  p_OWNER,
+                  p_NAME,
+                  p_TYPE);
+--
+for s in (
+ select regexp_substr(p_lines_list, '[^,]+', 1, level) line
+  from dual
+connect by regexp_substr(p_lines_list, '[^,]+', 1, level) is not null 
+)
+loop
+ if p_to_comment then
+  v_source_code(p_OWNER)(p_NAME)(p_TYPE)(s.line):='--'||
+     v_source_code(p_OWNER)(p_NAME)(p_TYPE)(s.line);  
+ else
+  v_source_code(p_OWNER)(p_NAME)(p_TYPE)(s.line):= 
+  case when p_regexp then
+  regexp_replace(v_source_code(p_OWNER)(p_NAME)(p_TYPE)(s.line),p_oldsub,p_newsub,1,1,'i')
+  else
+  replace(v_source_code(p_OWNER)(p_NAME)(p_TYPE)(s.line),p_oldsub,p_newsub) end;
+ end if;
+  --dbms_output.put_line(v_source_code(p_OWNER)(p_NAME)(p_TYPE)(s.line));
+end loop; 
+exception when others then
+   Raise_application_error(-20000,p_OWNER||'.'||p_NAME||' '||p_TYPE,true);
+end rplc;
 -- load exceptions from error package
 procedure init_exc_tab(
   p_owner varchar2 := user,
@@ -463,65 +510,6 @@ begin
      end;     
    end loop;
 end Recompile4PLScope;
--- load source code and save into collection
-procedure load_source_code(
-                p_OWNER varchar2,
-                p_NAME  varchar2,
-                p_TYPE  varchar2)
-is
-v_exists boolean := false;
-begin
-  begin
-    v_exists:= v_source_code(p_OWNER)(p_NAME)(p_TYPE).exists(1); 
-  exception when no_data_found then
-    v_source_code(p_OWNER)(p_NAME)(p_TYPE)(0) := 
-      'CREATE OR REPLACE /* TMAX '||to_char(sysdate,'rr-mm-dd hh24:mi:ss')||' */';
-  for s in (
-    select *
-      from all_source s
-     where s.OWNER = p_OWNER
-       and s.NAME = p_NAME
-       and s.TYPE = p_TYPE
-        )loop
-        v_source_code(s.OWNER)(s.NAME)(s.TYPE)(s.line) := s.text;
-  end loop; 
-  end;
-end load_source_code;
--- replace source code and save into collection
-procedure rplc(
-                p_OWNER varchar2,
-                p_NAME  varchar2,
-                p_TYPE  varchar2,
-                p_lines_list varchar2,
-                p_oldsub varchar2 default null,
-                p_newsub varchar2 default null,
-                p_to_comment boolean default false)
-is
-v_exists boolean := false;
-begin
-load_source_code(
-                  p_OWNER,
-                  p_NAME,
-                  p_TYPE);
---
-for s in (
- select regexp_substr(p_lines_list, '[^,]+', 1, level) line
-  from dual
-connect by regexp_substr(p_lines_list, '[^,]+', 1, level) is not null 
-)
-loop
- if p_to_comment then
-  v_source_code(p_OWNER)(p_NAME)(p_TYPE)(s.line):='--'||
-     v_source_code(p_OWNER)(p_NAME)(p_TYPE)(s.line);  
- else
-  v_source_code(p_OWNER)(p_NAME)(p_TYPE)(s.line):= 
-  regexp_replace(v_source_code(p_OWNER)(p_NAME)(p_TYPE)(s.line),p_oldsub,p_newsub,1,1,'i');
- end if;
-  --dbms_output.put_line(v_source_code(p_OWNER)(p_NAME)(p_TYPE)(s.line));
-end loop; 
-exception when others then
-   Raise_application_error(-20000,p_OWNER||'.'||p_NAME||' '||p_TYPE,true);
-end rplc;
 -- print replaced source code
 procedure print_replaced_source_code
   is
@@ -675,7 +663,8 @@ u.* from u)loop
           p_type => r.type,
           p_lines_list => r.dflt_line,
           p_oldsub => r.dflt1,
-          p_newsub => '/*O2T '||to_char(sysdate,'rr-mm-dd')||' '||r.dflt1||'*/');
+          p_newsub => '/*O2T '||to_char(sysdate,'rr-mm-dd')||' '||r.dflt1||'*/',
+          p_regexp => false);
     --
     rplc(p_owner => r.owner,
           p_name => r.name,
@@ -684,7 +673,8 @@ u.* from u)loop
           p_oldsub => r.http1,
           p_newsub => r.http1||'/*O2T '||to_char(sysdate,'rr-mm-dd')||' */ '||
           '$IF not tmax_Constpkg.c_isTibero $THEN , $END '||
-          r.dflt2);
+          r.dflt2,
+          p_regexp => false);
   end if;
 end loop;
 $else
@@ -692,6 +682,48 @@ $else
 $end
  return v_lines_count;
 end Chk_XmlTable;
+--
+function Chk_getstringval
+(
+  p_owner varchar2 := user,
+  p_ignore_prefix varchar2 := c_ignore_prefix,
+  p_modify boolean := false
+  )return  int
+  is
+v_lines_count pls_integer := 0;
+begin
+  for r in (
+  select 
+  regexp_substr(s.TEXT,'extract\s*\(.+\).getstringval\(\)',1,1,'i') substr1,
+  regexp_substr(s.TEXT,'(extract\s*\(.+\))(.getstringval\(\))',1,1,'i',1) substr2,
+  s.*
+   from all_source s
+  where s.OWNER = p_owner
+   and s.TYPE not like  'JAVA%'
+   and s.NAME not like p_ignore_prefix || '%'
+   and regexp_like(s.TEXT,'\).getstringval\(\)','i')
+   and not regexp_like(s.TEXT,'(([\/\\]\*O2T)|(--)).*(\).getstringval\(\))','i')
+)loop
+  if v_lines_count = 0 then
+        dbms_output.put_line(chr(9)||'Tibero syntax error in getstringval call');
+  end if;
+      dbms_output.put_line(chr(9)||to_char(v_lines_count+1)||')'||r.type||' '||r.owner||'.'||r.name||' line '||r.line);
+      v_lines_count := v_lines_count + 1;  
+  if p_modify then
+    --
+    rplc(p_owner => r.owner,
+          p_name => r.name,
+          p_type => r.type,
+          p_lines_list => r.line,
+          p_oldsub => r.substr1,
+          p_newsub => '/*O2T '||to_char(sysdate,'rr-mm-dd')||' */ '||
+          '$IF tmax_Constpkg.c_isTibero $THEN getstringval('||r.substr2||
+          ') $ELSE '||r.substr1||' $END ',
+          p_regexp => false);
+  end if;
+end loop;
+ return v_lines_count;
+end Chk_getstringval; 
 -- Run checking
 procedure Run(
   p_owner varchar2 := user,
@@ -713,6 +745,8 @@ procedure Run(
  v_lines_count := v_lines_count + chk_functions(p_owner,p_ignore_prefix);
  dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'chk_args');
  v_lines_count := v_lines_count + chk_args(p_owner,p_ignore_prefix);
+ dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'Chk_getstringval');
+ v_lines_count := v_lines_count + Chk_getstringval(p_owner,p_ignore_prefix,p_modify);
  dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'Chk_XmlTable');
  v_lines_count := v_lines_count + Chk_XmlTable(p_owner,p_ignore_prefix,p_modify);
  dbms_output.put_line('***');
