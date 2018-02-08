@@ -33,7 +33,14 @@ procedure rplc(
                 p_newsub varchar2 default null,
                 p_to_comment boolean default false);
 -- print replaced source code
-procedure print_replaced_source_code;                
+procedure print_replaced_source_code; 
+--
+function Chk_XmlTable
+(
+  p_owner varchar2 := user,
+  p_ignore_prefix varchar2 := c_ignore_prefix,
+  p_modify boolean := false
+  )return int;               
 end tmax_check4migrate;
 /
 create or replace package body tmax_check4migrate is
@@ -603,6 +610,88 @@ loop
 v_owner := v_source_code.next(v_owner);
 end loop;
 end modify_source_code;
+--
+function Chk_XmlTable
+(
+  p_owner varchar2 := user,
+  p_ignore_prefix varchar2 := c_ignore_prefix,
+  p_modify boolean := false
+  )return  int
+  is
+v_lines_count pls_integer := 0;
+begin
+$if dbms_db_version.ver_le_12 $then
+  for r in (with s as (
+select 
+case when regexp_like(s.TEXT,'xmltable','i') then line end m1,
+case when regexp_like(s.TEXT,'XMLNamespaces','i') then line end m2,
+case when regexp_like(s.TEXT,'DEFAULT','i') and not regexp_like(s.TEXT,'(([\/\\]\*O2T)|(--)).*(DEFAULT)','i') then line end m3,
+case when regexp_like(s.TEXT,'http','i') then line end m4,   
+s.*
+ from all_source s
+ where s.OWNER = p_owner
+ and s.TYPE not like  'JAVA%'
+ and s.NAME not like p_ignore_prefix || '%'
+ ),
+ m as (
+select * from s MATCH_RECOGNIZE(
+partition by owner,name,type  
+order by line
+measures 
+         MATCH_NUMBER() AS mno
+         ALL ROWS PER MATCH
+PATTERN (((UP1 FLAT1 FLAT2)|(UP2 FLAT2)|UP3) FLAT3+)
+         DEFINE
+           UP1 AS m1 is not null,
+           UP2 AS m1 is not null and m2 is not null,
+           UP3 AS m1 is not null and m2 is not null and m3 is not null,
+           FLAT1 AS m2 is not null,
+           FLAT2 AS m3 is not null,
+           FLAT3 AS m4 is not null
+       )),
+  t as (
+select owner,name,type,mno,max(m3)dflt_line,min(line) start_line, max(line) end_line,
+listagg(text) within group(order by line) txt
+from m
+group by owner,name,type,mno),
+  u as (
+select 
+regexp_substr(t.txt,'(DEFAULT)[^,]+,',1,1,'i') dflt1,
+regexp_substr(t.txt,'(DEFAULT)[^,]+',1,1,'i') dflt2,
+regexp_count(t.txt,'http',1,'i') http_count,
+t.* 
+from t)
+select
+regexp_substr(u.txt,'(as ([^)]*)){'||to_char(http_count-1)||'}[\)]*',1,1,'in',1) http1, 
+u.* from u)loop
+  if v_lines_count = 0 then
+        dbms_output.put_line(chr(9)||'Tibero syntax error in XmlTable statement');
+  end if;
+      dbms_output.put_line(chr(9)||to_char(v_lines_count+1)||')'||r.type||' '||r.owner||'.'||r.name||' lines '||r.start_line||'..'||r.end_line);
+      v_lines_count := v_lines_count + 2;  
+  if p_modify then
+    rplc(p_owner => r.owner,
+          p_name => r.name,
+          p_type => r.type,
+          p_lines_list => r.dflt_line,
+          p_oldsub => r.dflt1,
+          p_newsub => '/*O2T '||to_char(sysdate,'rr-mm-dd')||' '||r.dflt1||'*/');
+    --
+    rplc(p_owner => r.owner,
+          p_name => r.name,
+          p_type => r.type,
+          p_lines_list => r.end_line,
+          p_oldsub => r.http1,
+          p_newsub => r.http1||'/*O2T '||to_char(sysdate,'rr-mm-dd')||' */ '||
+          '$IF not tmax_Constpkg.c_isTibero $THEN , $END '||
+          r.dflt2);
+  end if;
+end loop;
+$else
+  dbms_output.put_line('CheckXmlTable function available only in 12c');
+$end
+ return v_lines_count;
+end Chk_XmlTable;
 -- Run checking
 procedure Run(
   p_owner varchar2 := user,
@@ -624,6 +713,8 @@ procedure Run(
  v_lines_count := v_lines_count + chk_functions(p_owner,p_ignore_prefix);
  dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'chk_args');
  v_lines_count := v_lines_count + chk_args(p_owner,p_ignore_prefix);
+ dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'Chk_XmlTable');
+ v_lines_count := v_lines_count + Chk_XmlTable(p_owner,p_ignore_prefix,p_modify);
  dbms_output.put_line('***');
  dbms_output.put_line(v_lines_count||' lines need to be rewritten for migration to Tibero');
  dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'count analyzable lines');
@@ -670,7 +761,7 @@ select d.REFERENCED_TYPE,
 )loop
 dbms_output.put_line(d.referenced_type||' '||d.referenced_name||' : '||d.reference_list);
 end loop;
--- 
+--
 if p_modify then
   modify_source_code;
 end if;  
