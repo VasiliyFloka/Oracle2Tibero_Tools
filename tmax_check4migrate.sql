@@ -599,7 +599,7 @@ v_owner := v_source_code.next(v_owner);
 end loop;
 end modify_source_code;
 --
-function Chk_XmlTable
+function Chk_XMLNamespaces
 (
   p_owner varchar2 := user,
   p_ignore_prefix varchar2 := c_ignore_prefix,
@@ -611,7 +611,6 @@ begin
 $if dbms_db_version.ver_le_12 $then
   for r in (with s as (
 select 
-case when regexp_like(s.TEXT,'xmltable','i') then line end m1,
 case when regexp_like(s.TEXT,'XMLNamespaces','i') then line end m2,
 case when regexp_like(s.TEXT,'DEFAULT','i') and not regexp_like(s.TEXT,'(([\/\\]\*O2T)|(--)).*(DEFAULT)','i') then line end m3,
 case when regexp_like(s.TEXT,'http','i') then line end m4,   
@@ -628,14 +627,12 @@ order by line
 measures 
          MATCH_NUMBER() AS mno
          ALL ROWS PER MATCH
-PATTERN (((UP1 FLAT1 FLAT2)|(UP2 FLAT2)|UP3) FLAT3+)
+PATTERN (FLAT1 NXST? FLAT2 NXST? FLAT3+)
          DEFINE
-           UP1 AS m1 is not null,
-           UP2 AS m1 is not null and m2 is not null,
-           UP3 AS m1 is not null and m2 is not null and m3 is not null,
            FLAT1 AS m2 is not null,
            FLAT2 AS m3 is not null,
-           FLAT3 AS m4 is not null
+           FLAT3 AS m4 is not null,
+           NXST  AS m2 is null and m3 is null and m4 is null
        )),
   t as (
 select owner,name,type,mno,max(m3)dflt_line,min(line) start_line, max(line) end_line,
@@ -653,7 +650,7 @@ select
 regexp_substr(u.txt,'(as ([^)]*)){'||to_char(http_count-1)||'}[\)]*',1,1,'in',1) http1, 
 u.* from u)loop
   if v_lines_count = 0 then
-        dbms_output.put_line(chr(9)||'Tibero syntax error in XmlTable statement');
+        dbms_output.put_line(chr(9)||'Tibero syntax error in XMLNamespaces statement');
   end if;
       dbms_output.put_line(chr(9)||to_char(v_lines_count+1)||')'||r.type||' '||r.owner||'.'||r.name||' lines '||r.start_line||'..'||r.end_line);
       v_lines_count := v_lines_count + 2;  
@@ -678,10 +675,10 @@ u.* from u)loop
   end if;
 end loop;
 $else
-  dbms_output.put_line('CheckXmlTable function available only in 12c');
+  dbms_output.put_line('CheckXMLNamespaces function available only in 12c');
 $end
  return v_lines_count;
-end Chk_XmlTable;
+end Chk_XMLNamespaces;
 --
 function Chk_getstringval
 (
@@ -724,6 +721,65 @@ begin
 end loop;
  return v_lines_count;
 end Chk_getstringval; 
+--
+function Chk_XmlMthds
+(
+  p_owner varchar2 := user,
+  p_ignore_prefix varchar2 := c_ignore_prefix,
+  p_modify boolean := false,
+  p_name varchar2 := null
+  )return  int
+is
+type XmlMthdsList_t is varray(2) of varchar2(128);
+v_m XmlMthdsList_t := XmlMthdsList_t('getrootelement','getclobval');
+v_e varchar2(32767);
+v_new varchar2(32767);
+v_lines_count int := 0;
+begin
+ for i in v_m.first..v_m.last
+  loop
+    v_e := '(([^ )]+)|(\([^\(]+\)))(\.'||v_m(i)||'\(\))';
+for r in (
+select regexp_substr(s.TEXT, v_e, 1, 1, 'i') sbstr1,
+       regexp_substr(s.TEXT, v_e, 1, 1, 'i', 1) sbstr2,
+       s.owner,
+       s.type,
+       s.name,
+       s.line
+  from all_source s
+ where s.OWNER = user
+   and s.TYPE not like 'JAVA%'
+   and s.NAME not like p_ignore_prefix || '%'
+   and regexp_like(s.TEXT, v_m(i), 'i')
+   and not regexp_like(s.TEXT,'(([\/\\]\*O2T)|(--)).*('||v_m(i)||')','i')
+   and (s.name = upper(p_name) or p_name is null)
+)loop
+  if v_lines_count = 0 then
+        dbms_output.put_line(chr(9)||'Tibero syntax error in '||v_m(i)||' call');
+  end if;
+      dbms_output.put_line(chr(9)||to_char(v_lines_count+1)||')'||r.type||' '||r.owner||'.'||r.name||' line '||r.line);
+      v_lines_count := v_lines_count + 1; 
+      v_new :=  case when r.sbstr2 is not null then '/*O2T '||to_char(sysdate,'rr-mm-dd')||' */ '||
+          ' $IF tmax_Constpkg.c_isTibero $THEN '||v_m(i)||'('||r.sbstr2||
+          ') $ELSE '||r.sbstr1||' $END '
+      else null end;
+        
+      dbms_output.put_line(chr(9)||'OLD: '||r.sbstr1);
+      dbms_output.put_line(chr(9)||'NEW: '||v_new);
+  if p_modify and v_new is not null then
+    --
+    rplc(p_owner => r.owner,
+          p_name => r.name,
+          p_type => r.type,
+          p_lines_list => r.line,
+          p_oldsub => r.sbstr1,
+          p_newsub => v_new,
+          p_regexp => false);
+  end if;
+end loop;
+ end loop;
+ return v_lines_count;
+end Chk_XmlMthds;
 -- Run checking
 procedure Run(
   p_owner varchar2 := user,
@@ -747,8 +803,10 @@ procedure Run(
  v_lines_count := v_lines_count + chk_args(p_owner,p_ignore_prefix);
  dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'Chk_getstringval');
  v_lines_count := v_lines_count + Chk_getstringval(p_owner,p_ignore_prefix,p_modify);
- dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'Chk_XmlTable');
- v_lines_count := v_lines_count + Chk_XmlTable(p_owner,p_ignore_prefix,p_modify);
+ dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'Chk_XmlMthds');
+ v_lines_count := v_lines_count + Chk_XmlMthds(p_owner,p_ignore_prefix,p_modify);
+ dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'Chk_XMLNamespaces');
+ v_lines_count := v_lines_count + Chk_XMLNamespaces(p_owner,p_ignore_prefix,p_modify);
  dbms_output.put_line('***');
  dbms_output.put_line(v_lines_count||' lines need to be rewritten for migration to Tibero');
  dbms_application_info.set_module($$PLSQL_UNIT || '.' ||$$PLSQL_LINE,'count analyzable lines');
