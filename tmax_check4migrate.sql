@@ -5,6 +5,21 @@ create or replace package tmax_check4migrate is
   -- Before using you need ALTER SESSION SET plscope_settings='IDENTIFIERS:ALL' and recompile pl/sql objects
   -- Version of Oracle must be 11g or higher 
   c_ignore_prefix constant varchar2(8) := 'TMAX_';
+  c_token_length constant int := 256;
+type sc_t is record
+( owner varchar2(128),
+  name varchar2(128),
+  type varchar2(16),
+  line int,
+  col int,
+  token varchar2(c_token_length char),
+  kind varchar2(16));
+type sct_t is table of sc_t;
+function sct(
+  p_owner varchar2 := user,
+  p_ignore_prefix varchar2 := c_ignore_prefix,
+  p_type varchar2 := null,
+  p_name varchar2 := null) return sct_t pipelined;
 -- Get exception name by error code
 function getExceptionName(p_ErrCode int) return varchar2;
 -- Checking for exceptions
@@ -858,5 +873,89 @@ if p_modify then
   modify_source_code;
 end if;  
  end Run;
+--
+function sct(
+  p_owner varchar2 := user,
+  p_ignore_prefix varchar2 := c_ignore_prefix,
+  p_type varchar2 := null,
+  p_name varchar2 := null) return sct_t pipelined
+is
+v_sc sc_t ;
+v_tr varchar2(32767) := '[[:space:],\(\)\;\.]';
+v_prev varchar2(c_token_length char); 
+begin
+for s in (
+select 
+s.owner,
+s.name,
+s.type,
+s.line,s.text
+from all_source s
+   where s.OWNER = p_owner
+     and s.TYPE not like  'JAVA%'
+     and s.NAME not like p_ignore_prefix || '%'
+     and (s.TYPE = upper(p_type) or p_type is null)
+     and (s.NAME = upper(p_name) or p_name is null)
+order by
+        s.owner,
+        s.name,
+        s.type,
+        s.line     
+     )loop
+  v_sc.col := 1;
+  for c in (
+   select regexp_instr(s.text, v_tr, 1, level) col
+    from dual
+  connect by regexp_instr(s.text, v_tr, 1, level) > 0
+  )
+  loop     
+  v_sc.owner:= s.owner;
+  v_sc.name := s.name;
+  v_sc.type := s.type;
+  v_sc.line := s.line;
+  v_sc.token := substr(s.text,v_sc.col,c.col-v_sc.col);
+  if regexp_replace(v_sc.token,'\s') is not null then
+   --start kind define
+   if upper(v_sc.token) in ('EXTRACT') then
+      v_sc.kind := 'XO';
+   elsif v_sc.token in (':=') then
+      v_sc.kind := 'AN';
+   elsif upper(v_sc.token) in ('SELECT') then
+      v_sc.kind := 'ST';
+   else
+    case v_prev 
+    when '.' then
+      select 
+      case when exists(select null from all_procedures p where p.PROCEDURE_NAME=upper(v_sc.token) and p.OBJECT_NAME = 'XMLTYPE')
+           then 'XM' else 'N' end
+      into v_sc.kind from dual;
+    when ':=' then
+      select 
+      case when exists(select null from all_arguments a where a.OBJECT_NAME=upper(v_sc.token) and a.POSITION=0 and a.TYPE_NAME='XMLTYPE')
+           then 'XO' else 'N' end
+      into v_sc.kind from dual;
+    else v_sc.kind := 'N';
+    end case;
+   end if;
+   --end kind define          
+     pipe row (v_sc);
+     --v_sc.kind := null;
+     v_prev := v_sc.token;
+  end if;
+  --
+  v_sc.col := c.col;
+  v_sc.token := substr(s.text,c.col,1);
+  if regexp_replace(v_sc.token,'\s') is not null then
+    v_sc.kind := case v_sc.token when ';' then 'SN' else 'N' end;
+     pipe row (v_sc);
+     v_prev := v_sc.token;
+     --v_sc.kind := null;
+  end if; 
+  v_sc.col := v_sc.col + 1;
+  end loop;
+--
+end loop;
+  return;
+end sct;
 end tmax_check4migrate;
 /
