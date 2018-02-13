@@ -737,7 +737,7 @@ end loop;
  return v_lines_count;
 end Chk_getstringval; 
 --
-function Chk_XmlMthds
+function Chk_XmlMthds_old
 (
   p_owner varchar2 := user,
   p_ignore_prefix varchar2 := c_ignore_prefix,
@@ -794,6 +794,108 @@ select regexp_substr(s.TEXT, v_e, 1, 1, 'i') sbstr1,
 end loop;
  end loop;
  return v_lines_count;
+end Chk_XmlMthds_old;
+--
+function Chk_XmlMthds
+(
+  p_owner varchar2 := user,
+  p_ignore_prefix varchar2 := c_ignore_prefix,
+  p_modify boolean := false,
+  p_type varchar2 := null,
+  p_name varchar2 := null
+  )return  int
+is
+v_lines_count int := 0;
+begin
+  for r in (
+    with s as (
+select 
+t.* 
+from tmax_check4migrate.sct(p_owner => p_owner,p_ignore_prefix => p_ignore_prefix,p_type => p_type,p_name => p_name) t
+ ),
+ m as (
+select * from s MATCH_RECOGNIZE(
+partition by owner,name,type  
+order by line,col
+measures 
+         MATCH_NUMBER() AS mno,
+         CLASSIFIER() AS CL
+         ALL ROWS PER MATCH
+PATTERN (((XS XO?)|XO) N+ XM)
+         DEFINE
+           XS as kind in ('SELECT',':='),
+           XO as kind = 'XO',
+           XM as kind = 'XM',
+           N  as kind in ('N','COMM1','COMM2','COMM3')
+       )),
+  t as (
+select owner,name,type,mno,
+min(case when cl = 'XS' then line end) XS_line,
+min(case when cl = 'XS' then token end) XS_token,
+min(case when cl = 'XO' then line end) XO_line,
+min(case when cl = 'XO' then token end) XO_token,
+min(case when cl = 'XM' then line end) XM_line,
+min(case when cl = 'XM' then token end) XM_token,
+/*listagg(cl,',' ON OVERFLOW TRUNCATE ) within group(order by line,col) cls,*/
+listagg(token,' ' $if dbms_db_version.ver_le_12_2 $then ON OVERFLOW TRUNCATE $end ) within group(order by line,col) txt
+from m
+group by owner,name,type,mno)
+select * from t )loop
+if v_lines_count = 0 then
+    dbms_output.put_line(chr(9)||'Tibero syntax error in '||r.xm_token||' call');
+end if;
+  dbms_output.put_line(chr(9)||to_char(v_lines_count+1)||')'||r.type||' '||r.owner||'.'||r.name||' line '||r.xm_line);
+  v_lines_count := v_lines_count + 1; 
+dbms_output.put_line(chr(9)||'OLD: '||r.txt);
+if p_modify then
+  if r.xo_line > 0 then
+    rplc(p_owner => r.owner,
+          p_name => r.name,
+          p_type => r.type,
+          p_lines_list => r.xo_line,
+          p_oldsub => r.xo_token,
+          p_newsub => '/*O2T '||to_char(sysdate,'rr-mm-dd')||' */ '||
+          ' $IF tmax_Constpkg.c_isTibero $THEN '||r.xm_token||'('||r.xo_token||
+          ' $ELSE '||r.xo_token||' $END ',
+          p_regexp => false);
+  elsif r.xs_line > 0 then
+    rplc(p_owner => r.owner,
+          p_name => r.name,
+          p_type => r.type,
+          p_lines_list => r.xs_line,
+          p_oldsub => r.xs_token,
+          p_newsub => '/*O2T '||to_char(sysdate,'rr-mm-dd')||' */ '||
+          ' $IF tmax_Constpkg.c_isTibero $THEN '||r.xs_token||r.xm_token||'('||
+          ' $ELSE '||r.xs_token||' $END ',
+          p_regexp => false);
+  end if;
+  --
+  if r.xm_line > 0 then
+    rplc(p_owner => r.owner,
+          p_name => r.name,
+          p_type => r.type,
+          p_lines_list => r.xm_line,
+          p_oldsub => '.'||r.xm_token||'()',
+          p_newsub => '/*O2T '||to_char(sysdate,'rr-mm-dd')||' */ '||
+          ' $IF tmax_Constpkg.c_isTibero $THEN '||')'||
+          ' $ELSE '||'.'||r.xm_token||'()'||' $END ',
+          p_regexp => false);
+  end if;
+end if;
+/* if r.xo_line > 0 then
+  dbms_output.put_line(chr(9)||'OLD: '||r.xs_token);
+else
+  dbms_output.put_line(chr(9)||'OLD: '||r.xs_token);
+end if;
+      
+     v_new :=  case when r.sbstr2 is not null then '\*O2T '||to_char(sysdate,'rr-mm-dd')||' *\ '||
+          ' $IF tmax_Constpkg.c_isTibero $THEN '||v_m(i)||'('||r.sbstr2||
+          ') $ELSE '||r.sbstr1||' $END '
+      else null end;
+
+dbms_output.put_line(chr(9)||'NEW: '||v_new);*/
+end loop;
+  return v_lines_count;
 end Chk_XmlMthds;
 -- Run checking
 procedure Run(
@@ -912,32 +1014,30 @@ order by
   v_sc.owner:= s.owner;
   v_sc.name := s.name;
   v_sc.type := s.type;
-  v_sc.line := s.line;
+  
   v_sc.token := substr(s.text,v_sc.col,c.col-v_sc.col);
   if regexp_replace(v_sc.token,'\s') is not null then
    --start kind define
-   if upper(v_sc.token) in ('EXTRACT') then
-      v_sc.kind := 'XO';
-   elsif v_sc.token in (':=') then
-      v_sc.kind := 'AN';
-   elsif upper(v_sc.token) in ('SELECT') then
-      v_sc.kind := 'ST';
-   else
-    case v_prev 
-    when '.' then
-      select 
-      case when exists(select null from all_procedures p where p.PROCEDURE_NAME=upper(v_sc.token) and p.OBJECT_NAME = 'XMLTYPE')
-           then 'XM' else 'N' end
-      into v_sc.kind from dual;
-    when ':=' then
-      select 
-      case when exists(select null from all_arguments a where a.OBJECT_NAME=upper(v_sc.token) and a.POSITION=0 and a.TYPE_NAME='XMLTYPE')
-           then 'XO' else 'N' end
-      into v_sc.kind from dual;
-    else v_sc.kind := 'N';
-    end case;
-   end if;
-   --end kind define          
+   select  
+   case when v_sc.kind = 'COMM1' and v_sc.line = s.line then 'COMM1'
+        when v_sc.kind = 'COMM2' and v_prev not like '%*/%' then 'COMM2'
+        when v_sc.kind = 'COMM3' and not regexp_like(v_sc.token,'\$END','i') then 'COMM3' 
+        when regexp_like(v_sc.token,'(--){2,}') then 'COMM1'
+        when regexp_like(v_sc.token,'^''{0}[^'']*(/\*)[^'']*''{0}$') then 'COMM2'
+        when regexp_like(v_sc.token,'\$IF','i') then 'COMM3'
+        when upper(v_sc.token) in ('EXTRACT') and v_prev != '.' then 'XO'
+        when v_sc.token in (':=') then v_sc.token
+        when upper(v_sc.token) in ('SELECT') then upper(v_sc.token)
+        when v_prev = '.' and
+             exists(select null from all_procedures p where p.PROCEDURE_NAME=upper(v_sc.token) and p.OBJECT_NAME = 'XMLTYPE')
+             then 'XM' 
+        when v_prev =':=' and 
+             exists(select null from all_arguments a where a.OBJECT_NAME=upper(v_sc.token) and a.POSITION=0 and a.TYPE_NAME='XMLTYPE')
+             then 'XO' 
+        else 'N'
+    end into v_sc.kind from dual;
+   --end kind define
+     v_sc.line := s.line;          
      pipe row (v_sc);
      --v_sc.kind := null;
      v_prev := v_sc.token;
@@ -946,7 +1046,16 @@ order by
   v_sc.col := c.col;
   v_sc.token := substr(s.text,c.col,1);
   if regexp_replace(v_sc.token,'\s') is not null then
-    v_sc.kind := case v_sc.token when ';' then 'SN' else 'N' end;
+    v_sc.kind := case  
+                      when v_sc.kind = 'COMM1' then v_sc.kind
+                      when v_sc.kind = 'COMM2' and v_prev not like '%*/%' then 'COMM2'
+                      when v_sc.kind = 'COMM3' and not regexp_like(v_sc.token,'\$END','i') then 'COMM3'   
+                      else case v_sc.token 
+                           when ';' 
+                           then v_sc.token 
+                           else 'N' 
+                           end
+                 end;
      pipe row (v_sc);
      v_prev := v_sc.token;
      --v_sc.kind := null;
