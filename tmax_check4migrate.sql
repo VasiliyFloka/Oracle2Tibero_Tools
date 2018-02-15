@@ -642,8 +642,9 @@ order by line
 measures 
          MATCH_NUMBER() AS mno
          ALL ROWS PER MATCH
-PATTERN (FLAT1 NXST? FLAT2 NXST? FLAT3+)
+PATTERN (((FLAT0)|(FLAT1 NXST? FLAT2)) NXST? FLAT3+)
          DEFINE
+           FLAT0 AS m2 is not null and m3 is not null,
            FLAT1 AS m2 is not null,
            FLAT2 AS m3 is not null,
            FLAT3 AS m4 is not null,
